@@ -5,6 +5,8 @@ import org.springframework.jms.core.JmsTemplate;
 import org.springframework.lang.NonNull;
 
 public interface ConfigService {
-    ConnectionConfig listenQueue(@NonNull final ConnectionConfig connectionConfig);
+    ConnectionConfig createContainer(@NonNull final ConnectionConfig connectionConfig);
+    boolean stopListen(@NonNull final String queueName);
+    boolean startListen(@NonNull final String queueName);
     JmsTemplate getJmsTemplate(@NonNull final ConnectionConfig connectionConfig);
 }

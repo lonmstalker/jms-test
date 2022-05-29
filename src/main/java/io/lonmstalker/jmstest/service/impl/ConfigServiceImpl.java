@@ -2,45 +2,51 @@ package io.lonmstalker.jmstest.service.impl;
 
 import com.ibm.mq.jms.MQConnectionFactory;
 import com.ibm.msg.client.wmq.WMQConstants;
-import io.lonmstalker.jmstest.listener.DefaultListener;
+import io.lonmstalker.jmstest.jms.CustomContainerFactory;
 import io.lonmstalker.jmstest.model.ConnectionConfig;
 import io.lonmstalker.jmstest.service.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
-import org.springframework.core.task.TaskExecutor;
-import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
-import org.springframework.jms.config.JmsListenerEndpoint;
-import org.springframework.jms.config.JmsListenerEndpointRegistry;
-import org.springframework.jms.config.SimpleJmsListenerEndpoint;
 import org.springframework.jms.connection.CachingConnectionFactory;
 import org.springframework.jms.core.JmsTemplate;
-import org.springframework.jms.support.QosSettings;
-import org.springframework.jms.support.converter.SimpleMessageConverter;
+import org.springframework.jms.listener.DefaultMessageListenerContainer;
+import org.springframework.jms.support.converter.MessageConverter;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 
 import javax.jms.ConnectionFactory;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 import static javax.jms.DeliveryMode.NON_PERSISTENT;
-import static javax.jms.Session.CLIENT_ACKNOWLEDGE;
 
 @Service
 @RequiredArgsConstructor
 public class ConfigServiceImpl implements ConfigService {
-    private final JmsListenerEndpointRegistry registry;
-    private final TaskExecutor taskExecutor;
+    private final MessageConverter messageConverter;
+    private final CustomContainerFactory containerFactory;
     private static final Map<String, ConnectionFactory> factoryMap = new HashMap<>();
     private static final Map<String, JmsTemplate> templateMap = new HashMap<>();
 
     @NonNull
     @Override
-    public ConnectionConfig listenQueue(@NonNull final ConnectionConfig connectionConfig) {
-        final var containerFactory = getContainerFactory(getConnectionFactory(connectionConfig), this.taskExecutor);
-        this.registry.registerListenerContainer(getJmsListenerEndpoint(connectionConfig.getQueueName()), containerFactory, true);
+    public ConnectionConfig createContainer(@NonNull final ConnectionConfig connectionConfig) {
+        var listenerContainer =
+                this.containerFactory.createListenerContainer(connectionConfig, getConnectionFactory(connectionConfig));
+        if (Boolean.TRUE.equals(connectionConfig.getAutoStartup())) {
+            listenerContainer.start();
+        }
         return connectionConfig;
+    }
+
+    @Override
+    public boolean stopListen(String queueName) {
+        return this.containerFactory.destroyListener(queueName);
+    }
+
+    @Override
+    public boolean startListen(String queueName) {
+        return this.containerFactory.startListener(queueName);
     }
 
     @NonNull
@@ -48,16 +54,16 @@ public class ConfigServiceImpl implements ConfigService {
     public JmsTemplate getJmsTemplate(@NonNull final ConnectionConfig connectionConfig) {
         return templateMap.containsKey(connectionConfig.getQueueName())
                 ? templateMap.get(connectionConfig.getQueueName())
-                : createJmsTemplate(connectionConfig);
+                : createJmsTemplate(connectionConfig, this.messageConverter);
     }
 
     @NonNull
-    private static JmsTemplate createJmsTemplate(@NonNull final ConnectionConfig connectionConfig){
+    private static JmsTemplate createJmsTemplate(@NonNull final ConnectionConfig connectionConfig, @NonNull final MessageConverter messageConverter) {
         var jmsTemplate = new JmsTemplate();
         var conFactory = factoryMap.getOrDefault(connectionConfig.getQueueName(), getConnectionFactory(connectionConfig));
 
         jmsTemplate.setConnectionFactory(conFactory);
-        jmsTemplate.setMessageConverter(new SimpleMessageConverter());
+        jmsTemplate.setMessageConverter(messageConverter);
         jmsTemplate.setDefaultDestinationName(connectionConfig.getQueueName());
         jmsTemplate.setDeliveryMode(NON_PERSISTENT);
         jmsTemplate.setDeliveryPersistent(false);
@@ -65,33 +71,6 @@ public class ConfigServiceImpl implements ConfigService {
         templateMap.put(connectionConfig.getQueueName(), jmsTemplate);
 
         return jmsTemplate;
-    }
-
-    @NonNull
-    private static DefaultJmsListenerContainerFactory getContainerFactory(
-            @NonNull final ConnectionFactory connectionFactory, @NonNull final TaskExecutor taskExecutor
-    ) {
-        final var factory = new DefaultJmsListenerContainerFactory();
-        final var qosSettings = new QosSettings();
-
-        qosSettings.setDeliveryMode(NON_PERSISTENT);
-        factory.setTaskExecutor(taskExecutor);
-        factory.setConnectionFactory(connectionFactory);
-        factory.setSessionAcknowledgeMode(CLIENT_ACKNOWLEDGE);
-        factory.setReplyQosSettings(qosSettings);
-        factory.setAutoStartup(true);
-        factory.setConcurrency("2");
-
-        return factory;
-    }
-
-    @NonNull
-    private static JmsListenerEndpoint getJmsListenerEndpoint(@NonNull final String queueName) {
-        final var endpoint = new SimpleJmsListenerEndpoint();
-        endpoint.setId("myJmsEndpoint-" + UUID.randomUUID());
-        endpoint.setDestination(queueName);
-        endpoint.setMessageListener(new DefaultListener());
-        return endpoint;
     }
 
     @NonNull
